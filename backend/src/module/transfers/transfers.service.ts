@@ -1,5 +1,5 @@
-import { ForbiddenException, Injectable , BadRequestException, NotFoundException} from "@nestjs/common";
-import { createHash, randomUUID } from "crypto";
+import { ForbiddenException, Injectable, BadRequestException, NotFoundException, ConflictException } from "@nestjs/common";
+import { createHash} from "crypto";
 import { DbService } from "../../db/db.service";
 import { CreateTransferDto } from "./dto/create_transfers.dto";
 import type { AuthUser } from "../../common/types/auth-user";
@@ -7,7 +7,7 @@ import type { AuthUser } from "../../common/types/auth-user";
 
 @Injectable()
 export class TransfersService {
-    constructor(private readonly db: DbService) {}
+    constructor(private readonly db: DbService) { }
 
     async getAll(user: AuthUser, limit: number, offset: number) {
         if (user.role === 'ADMIN') {
@@ -96,31 +96,103 @@ export class TransfersService {
 
     async create(
         user: AuthUser,
-        dto: CreateTransferDto
+        dto: CreateTransferDto,
+        idemKey: string,
     ) {
-        const client = await this.db.Transaction(async (client) => {
-            
+        const res = await this.db.Transaction(async (client) => {
+
             if (dto.destination_account_id === dto.source_account_id) {
                 throw new BadRequestException('Source and destination accounts must be different.');
             }
 
             const [firstId, secondId] = [dto.source_account_id, dto.destination_account_id].sort();
 
+
+            const requestHash = createHash('sha256')
+                .update(
+                    JSON.stringify({
+                        source_account_id: dto.source_account_id,
+                        destination_account_id: dto.destination_account_id,
+                        amount_minor: dto.amount_minor,
+                        currency: dto.currency,
+                    }),
+                )
+                .digest('hex');
+
+            const insertTransferRes = await client.query(
+                `
+                    INSERT INTO transfers (
+                        client_id,
+                        idem_key,
+                        request_hash,
+                        source_account_id,
+                        destination_account_id,
+                        amount_minor,
+                        currency,
+                        status
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, 'PROCESSING')
+                    ON CONFLICT (client_id, idem_key) DO NOTHING
+                    RETURNING *
+                    `,
+                [
+                    user.id,
+                    idemKey,
+                    requestHash,
+                    dto.source_account_id,
+                    dto.destination_account_id,
+                    dto.amount_minor,
+                    dto.currency,
+                ],
+            );
+
+            let transferRecord;
+
+            if (insertTransferRes.rowCount === 0) {
+                const existingRes = await client.query(
+                    `
+                        SELECT *
+                        FROM transfers
+                        WHERE client_id = $1
+                          AND idem_key = $2
+                        FOR UPDATE
+                        `,
+                    [user.id, idemKey],
+                );
+
+                const existingTransfer = existingRes.rows[0];
+
+                if (!existingTransfer) {
+                    throw new BadRequestException('Idempotency record not found.');
+                }
+
+                if (existingTransfer.request_hash !== requestHash) {
+                    throw new ConflictException(
+                        'Idempotency-Key was reused with a different request body.',
+                    );
+                }
+
+                return existingTransfer.response_body ?? existingTransfer;
+            } else {
+                transferRecord = insertTransferRes.rows[0];
+            }
+
+            
             const firstAccount = await client.query(
                 `SELECT * FROM accounts WHERE id = $1 FOR UPDATE`,
                 [firstId],
             ).then(res => res.rows[0]);
 
-            if( !firstAccount) {
+            if (!firstAccount) {
                 throw new NotFoundException(`Account with id ${firstId} not found.`);
             }
-            
+
             const secondAccount = await client.query(
                 `SELECT * FROM accounts WHERE id = $1 FOR UPDATE`,
                 [secondId],
             ).then(res => res.rows[0]);
-            
-            if( !secondAccount) {
+
+            if (!secondAccount) {
                 throw new NotFoundException(`Account with id ${secondId} not found.`);
             }
 
@@ -138,12 +210,13 @@ export class TransfersService {
             if (user.role !== 'ADMIN' && sourceAccount.owner_user_id !== user.id) {
                 throw new ForbiddenException('Source account not owned by user.');
             }
-            
-            sourceAccount.available_balance_minor = Number(sourceAccount.available_balance_minor);
+
+            const sourceBalance = Number(sourceAccount.available_balance_minor);
             // console.log(sourceAccount.available_balance_minor, dto.amount_minor);
-            if (sourceAccount.available_balance_minor < dto.amount_minor) {
+            if (sourceBalance < dto.amount_minor) {
                 throw new BadRequestException('Insufficient funds in source account.');
             }
+            
 
             await client.query(
                 `
@@ -161,58 +234,47 @@ export class TransfersService {
                 WHERE id = $2
                 RETURNING *`,
                 [dto.amount_minor, dto.destination_account_id],
-             );
+            );
 
-            const requestHash = createHash('sha256')
-                .update(
-                    JSON.stringify({
-                    source_account_id: dto.source_account_id,
-                    destination_account_id: dto.destination_account_id,
-                    amount_minor: dto.amount_minor,
-                    currency: dto.currency,
-                    }),
-                )
-                .digest('hex');
+            
 
-                const transfer = await client.query(
+            await client.query(
+                `INSERT INTO ledger_entries 
+                        (transfer_id, account_id, entry_type, side, amount_minor, currency) 
+                    VALUES 
+                        ($1, $2, 'TRANSFER', 'DEBIT', $3, $4),
+                        ($1, $5, 'TRANSFER', 'CREDIT', $3, $4)`,
+                [transferRecord.id, dto.source_account_id, dto.amount_minor, dto.currency, dto.destination_account_id],
+            );
+
+
+            const responseBody = {
+                id: transferRecord.id,
+                client_id: user.id,
+                idem_key: idemKey,
+                source_account_id: dto.source_account_id,
+                destination_account_id: dto.destination_account_id,
+                amount_minor: dto.amount_minor,
+                currency: dto.currency,
+                status: 'SUCCESS',
+            };
+
+            const updatedTransferRes = await client.query(
                 `
-                INSERT INTO transfers (
-                    client_id,
-                    idem_key,
-                    request_hash,
-                    source_account_id,
-                    destination_account_id,
-                    amount_minor,
-                    currency,
-                    status
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, 'SUCCESS')
-                RETURNING *
-                `,
-                [
-                    'demo-client',
-                    randomUUID(),
-                    requestHash,
-                    dto.source_account_id,
-                    dto.destination_account_id,
-                    dto.amount_minor,
-                    dto.currency,
-                ],
+                    UPDATE transfers
+                    SET
+                        status = 'SUCCESS',
+                        response_body = $1,
+                        updated_at = NOW()
+                    WHERE id = $2
+                    RETURNING *
+                    `,
+                [JSON.stringify(responseBody), transferRecord.id],
             );
-
-            await client.query(
-                `INSERT INTO ledger_entries (transfer_id, account_id, entry_type, side, amount_minor, currency) VALUES ($1, $2, 'TRANSFER', 'DEBIT', $3, $4)`,
-                [transfer.rows[0].id, dto.source_account_id, dto.amount_minor, dto.currency],
-            );
-
-            await client.query(
-                `INSERT INTO ledger_entries (transfer_id, account_id, entry_type, side, amount_minor, currency) VALUES ($1, $2, 'TRANSFER', 'CREDIT', $3, $4)`,
-                [transfer.rows[0].id, dto.destination_account_id, dto.amount_minor, dto.currency],
-            );
-            return transfer.rows[0];
+            return updatedTransferRes.rows[0];
         });
 
-        return client;
+        return res;
     }
 
 }

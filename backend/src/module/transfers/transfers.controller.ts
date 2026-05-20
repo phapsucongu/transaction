@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, DefaultValuePipe, Get, Param, ParseIntPipe, ParseUUIDPipe, Post, Query, UseGuards } from "@nestjs/common";
+import { BadRequestException, Body, Controller, DefaultValuePipe, Get, Headers, Param, ParseIntPipe, ParseUUIDPipe, Post, Query, UseGuards } from "@nestjs/common";
 import { TransfersService } from "./transfers.service";
 import { CreateTransferDto } from "./dto/create_transfers.dto";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
@@ -49,7 +49,8 @@ export class TransfersController {
     create(
         @CurrentUser() user: AuthUser,
         @Body() dto: CreateTransferDto,
+        @Headers('idempotency-key') idemKey: string,
     ) {
-        return this.transfersService.create(user, dto);
+        return this.transfersService.create(user, dto, idemKey);
     }
 }
