@@ -5206,17 +5206,17 @@ wcwidth@^1.0.1:
 
 webpack-node-externals@3.0.0:
   version "3.0.0"
-  resolved "https://registry.yarnpkg.com/webpack-node-externals/-/webpack-node-externals-3.0.0.tgz#1a3407c158d547a9feb4229a9e3385b7b60c9917"
+  resolved "https://registry.yarnpkg.com/frontendpack-node-externals/-/frontendpack-node-externals-3.0.0.tgz#1a3407c158d547a9feb4229a9e3385b7b60c9917"
   integrity sha512-LnL6Z3GGDPht/AigwRh2dvL9PQPFQ8skEpVrWZXLWBYmqcaojHNN0onvHzie6rq7EWKrrBfPYqNEzTJgiwEQDQ==
 
 webpack-sources@^3.3.4:
   version "3.4.0"
-  resolved "https://registry.yarnpkg.com/webpack-sources/-/webpack-sources-3.4.0.tgz#67cdfdff349ff1e3e7ca5c1ed6a2802b84cf6cf5"
+  resolved "https://registry.yarnpkg.com/frontendpack-sources/-/frontendpack-sources-3.4.0.tgz#67cdfdff349ff1e3e7ca5c1ed6a2802b84cf6cf5"
   integrity sha512-gHwIe1cgBvvfLeu1Yz/dcFpmHfKDVxxyqI+kzqmuxZED81z2ChxpyqPaWcNqigPywhaEke7AjSGga+kxY55gjQ==
 
 webpack@5.106.0:
   version "5.106.0"
-  resolved "https://registry.yarnpkg.com/webpack/-/webpack-5.106.0.tgz#ee374da5573eef1e47b2650d6be8e40fb928d697"
+  resolved "https://registry.yarnpkg.com/frontendpack/-/frontendpack-5.106.0.tgz#ee374da5573eef1e47b2650d6be8e40fb928d697"
   integrity sha512-Pkx5joZ9RrdgO5LBkyX1L2ZAJeK/Taz3vqZ9CbcP0wS5LEMx5QkKsEwLl29QJfihZ+DKRBFldzy1O30pJ1MDpA==
   dependencies:
     "@types/eslint-scope" "^3.7.7"

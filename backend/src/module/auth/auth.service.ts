@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
@@ -104,5 +105,43 @@ export class AuthService {
         role: user.role,
       },
     };
+  }
+
+  async me(userId: string) {
+    const result = await this.db.query(
+      `
+      SELECT
+        id,
+        email,
+        full_name,
+        role,
+        status
+      FROM app_users
+      WHERE id = $1
+      `,
+      [userId],
+    );
+
+    const user = result.rows[0];
+
+    if (!user) {
+      throw new NotFoundException('User not found.');
+    }
+
+    if (user.status !== 'ACTIVE') {
+      throw new UnauthorizedException('User is locked.');
+    }
+
+    return {
+      id: user.id,
+      email: user.email,
+      full_name: user.full_name,
+      role: user.role,
+      status: user.status,
+    };
+  }
+
+  logout() {
+    return;
   }
 }
