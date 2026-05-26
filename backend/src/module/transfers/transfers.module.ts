@@ -1,12 +1,13 @@
-import { Module } from "@nestjs/common";
-import { DbModule } from "../../db/db.module";
-import { TransfersController } from "./transfers.controller";
-import { TransfersService } from "./transfers.service";
-import { AuthModule } from "../auth/auth.module";
+import { Module } from '@nestjs/common';
+import { DbModule } from '../../db/db.module';
+import { AuthModule } from '../auth/auth.module';
+import { OutboxModule } from '../outbox/outbox.module';
+import { TransfersController } from './transfers.controller';
+import { TransfersService } from './transfers.service';
 
 @Module({
-    imports: [DbModule, AuthModule],
+    imports: [DbModule, AuthModule, OutboxModule],
     controllers: [TransfersController],
     providers: [TransfersService],
 })
-export class TransfersModule {}
+export class TransfersModule { }

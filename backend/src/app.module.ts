@@ -7,6 +7,7 @@ import { HealthModule } from './module/health/health.module';
 import { AccountsModule } from './module/accounts/accounts.module';
 import { TransfersModule } from './module/transfers/transfers.module';
 import { AuthModule } from './module/auth/auth.module';
+import { ProcessingModule } from './module/processing/processing.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { AuthModule } from './module/auth/auth.module';
     AccountsModule,
     TransfersModule,
     AuthModule,
+    ProcessingModule
   ],
   controllers: [AppController],
   providers: [AppService],

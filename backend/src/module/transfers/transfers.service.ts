@@ -1,13 +1,31 @@
 import { ForbiddenException, Injectable, BadRequestException, NotFoundException, ConflictException } from "@nestjs/common";
-import { createHash} from "crypto";
+import { createHash } from "crypto";
 import { DbService } from "../../db/db.service";
 import { CreateTransferDto } from "./dto/create_transfers.dto";
 import type { AuthUser } from "../../common/types/auth-user";
+import { OutboxService } from "../outbox/outbox.service";
+
+function normalizeResponseBody<T extends Record<string, unknown>>(transfer: T) {
+    const responseBody = transfer.response_body;
+
+    if (!responseBody) {
+        return transfer;
+    }
+
+    if (typeof responseBody === 'string') {
+        return JSON.parse(responseBody);
+    }
+
+    return responseBody;
+}
 
 
 @Injectable()
 export class TransfersService {
-    constructor(private readonly db: DbService) { }
+    constructor(
+        private readonly db: DbService,
+        private readonly outbox: OutboxService
+    ) { }
 
     async getAll(user: AuthUser, limit: number, offset: number) {
         if (user.role === 'ADMIN') {
@@ -172,12 +190,12 @@ export class TransfersService {
                     );
                 }
 
-                return existingTransfer.response_body ?? existingTransfer;
+                return normalizeResponseBody(existingTransfer);
             } else {
                 transferRecord = insertTransferRes.rows[0];
             }
 
-            
+
             const firstAccount = await client.query(
                 `SELECT * FROM accounts WHERE id = $1 FOR UPDATE`,
                 [firstId],
@@ -216,7 +234,7 @@ export class TransfersService {
             if (sourceBalance < dto.amount_minor) {
                 throw new BadRequestException('Insufficient funds in source account.');
             }
-            
+
 
             await client.query(
                 `
@@ -236,7 +254,7 @@ export class TransfersService {
                 [dto.amount_minor, dto.destination_account_id],
             );
 
-            
+
 
             await client.query(
                 `INSERT INTO ledger_entries 
@@ -271,7 +289,26 @@ export class TransfersService {
                     `,
                 [JSON.stringify(responseBody), transferRecord.id],
             );
-            return updatedTransferRes.rows[0];
+
+            const updatedTransfer = updatedTransferRes.rows[0];
+
+            await this.outbox.createEvent(client, {
+                aggregateType: 'TRANSFER',
+                aggregateId: updatedTransfer.id,
+                eventType: 'transfer.completed',
+                routingKey: 'transfer.completed',
+                payload: {
+                    id: updatedTransfer.id,
+                    source_account_id: updatedTransfer.source_account_id,
+                    destination_account_id: updatedTransfer.destination_account_id,
+                    amount_minor: updatedTransfer.amount_minor,
+                    currency: updatedTransfer.currency,
+                    status: updatedTransfer.status,
+                    created_at: updatedTransfer.created_at,
+                },
+            });
+
+            return normalizeResponseBody(updatedTransfer);
         });
 
         return res;
