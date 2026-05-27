@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from "@nestjs/common";
+import { BadRequestException, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { DbService } from "../../db/db.service";
 import { CreateAccountDto } from "./dto/create-account.dto";
 import type { AuthUser } from "../../common/types/auth-user";
@@ -24,10 +24,10 @@ export class AccountsService {
             );
             return result.rows[0];
         } catch (error: any) {
-            if (error.code === '23505') {
+            if (error?.code === '23505') {
                 throw new BadRequestException(`Account with code ${dto.code} already exists.`);
             }
-            throw error;
+            throw new InternalServerErrorException('Failed to create account.');
         }
     }
 

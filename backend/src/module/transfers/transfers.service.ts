@@ -1,4 +1,11 @@
-import { ForbiddenException, Injectable, BadRequestException, NotFoundException, ConflictException } from "@nestjs/common";
+import {
+    BadRequestException,
+    ConflictException,
+    ForbiddenException,
+    InternalServerErrorException,
+    Injectable,
+    NotFoundException,
+} from '@nestjs/common';
 import { createHash } from "crypto";
 import { DbService } from "../../db/db.service";
 import { CreateTransferDto } from "./dto/create_transfers.dto";
@@ -13,7 +20,11 @@ function normalizeResponseBody<T extends Record<string, unknown>>(transfer: T) {
     }
 
     if (typeof responseBody === 'string') {
-        return JSON.parse(responseBody);
+        try {
+            return JSON.parse(responseBody);
+        } catch {
+            throw new InternalServerErrorException('Invalid transfer response body.');
+        }
     }
 
     return responseBody;
@@ -305,6 +316,8 @@ export class TransfersService {
                     currency: updatedTransfer.currency,
                     status: updatedTransfer.status,
                     created_at: updatedTransfer.created_at,
+
+                    // force_fail: true,
                 },
             });
 

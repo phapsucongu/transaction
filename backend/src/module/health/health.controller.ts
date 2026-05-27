@@ -1,5 +1,5 @@
-import { Controller, Get } from "@nestjs/common";
-import { DbService } from "../../db/db.service";
+import { Controller, Get, ServiceUnavailableException } from '@nestjs/common';
+import { DbService } from '../../db/db.service';
 
 @Controller()
 export class HealthController {
@@ -16,7 +16,7 @@ export class HealthController {
             await this.db.query('SELECT 1');
             return 'OK';
         } catch (error) {
-            throw new Error('Database connection failed');
+            throw new ServiceUnavailableException('Database connection failed.');
         }
     }
 }

@@ -13,7 +13,7 @@ export class ProcessingWorkerService implements OnModuleDestroy {
     constructor(
         private readonly configService: ConfigService,
         private readonly dbService: DbService,
-    ) {}
+    ) { }
 
 
     private async processTransferEvent(
@@ -28,6 +28,14 @@ export class ProcessingWorkerService implements OnModuleDestroy {
             this.logger.warn(`Received unexpected event type: ${input.eventType}`);
             return;
         }
+
+
+        // /* 
+        //     force_fail test
+        // */
+        // if (input.payload.force_fail === true) {
+        //     throw new Error('Forced processing failure for testing.');
+        // }
 
         this.logger.log(`Processing transfer event with messageId: ${input.messageId}`);
 
@@ -67,7 +75,7 @@ export class ProcessingWorkerService implements OnModuleDestroy {
                 VALUES ($1, $2)
                 ON CONFLICT (consumer_name, message_id) DO NOTHING
                 RETURNING consumer_name, message_id
-            `, [this.configService.get<string>('CONSUMER_NAME') ||'transfer-processing-worker', messageId]
+            `, [this.configService.get<string>('CONSUMER_NAME') || 'transfer-processing-worker', messageId]
             );
 
             if (insertProcessedResult.rowCount === 0) {
@@ -85,49 +93,180 @@ export class ProcessingWorkerService implements OnModuleDestroy {
         });
     }
 
+    private async handleFailedMessage(
+        msg: amqp.ConsumeMessage,
+        error: Error,
+    ) {
+        if (!this.channel) {
+            throw new Error('RabbitMQ channel is not initialized.');
+        }
+
+        const retryQueueName =
+            this.configService.get<string>('RABBITMQ_TRANSFER_RETRY_QUEUE') ??
+            'txsim.transfer.events.retry';
+
+        const dlqName =
+            this.configService.get<string>('RABBITMQ_TRANSFER_DLQ') ??
+            'txsim.transfer.events.dlq';
+
+        const maxRetries = Number(
+            this.configService.get<string>('PROCESSING_MAX_RETRIES') ?? 3,
+        );
+
+        const currentRetryCount = Number(
+            msg.properties.headers?.['x-retry-count'] ?? 0,
+        );
+
+        const nextRetryCount = currentRetryCount + 1;
+
+        const messageId = msg.properties.messageId ?? 'no-message-id';
+
+        const headers = {
+            ...(msg.properties.headers ?? {}),
+            'x-retry-count': nextRetryCount,
+            'x-last-error': error.message,
+            'x-failed-at': new Date().toISOString(),
+        };
+
+        if (currentRetryCount >= maxRetries) {
+            this.channel.sendToQueue(dlqName, msg.content, {
+                persistent: true,
+                contentType: msg.properties.contentType,
+                messageId: msg.properties.messageId,
+                type: msg.properties.type,
+                headers,
+            });
+
+            /**
+             * Ack message gốc sau khi đã copy sang DLQ.
+             * Nếu không ack, RabbitMQ sẽ giữ hoặc redeliver message gốc.
+             */
+            this.channel.ack(msg);
+
+            this.logger.error(
+                `Message ${messageId} moved to DLQ after ${currentRetryCount} retries.`,
+            );
+
+            return;
+        }
+
+        this.channel.sendToQueue(retryQueueName, msg.content, {
+            persistent: true,
+            contentType: msg.properties.contentType,
+            messageId: msg.properties.messageId,
+            type: msg.properties.type,
+            headers,
+        });
+
+        /**
+         * Ack message gốc sau khi đã copy sang retry queue.
+         */
+        this.channel.ack(msg);
+
+        this.logger.warn(
+            `Message ${messageId} scheduled for retry ${nextRetryCount}/${maxRetries}.`,
+        );
+    }
+
     async start() {
-        const rabbitmqUrl = this.configService.get<string>('RABBITMQ_URL') ;
+        const rabbitmqUrl = this.configService.get<string>('RABBITMQ_URL');
 
         if (!rabbitmqUrl) {
             this.logger.error('RABBITMQ_URL is not defined in configuration');
             throw new Error('Missing RABBITMQ_URL configuration');
         }
-        const queueName = this.configService.get<string>('RABBITMQ_TRANSFER_QUEUE') || 'txsim.transfer.events';
-        
+
+        const exchange =
+            this.configService.get<string>('RABBITMQ_EXCHANGE') ??
+            'txsim.events';
+
+        const queueName =
+            this.configService.get<string>('RABBITMQ_TRANSFER_QUEUE') ??
+            'txsim.transfer.events';
+
+        const retryQueueName =
+            this.configService.get<string>('RABBITMQ_TRANSFER_RETRY_QUEUE') ??
+            'txsim.transfer.events.retry';
+
+        const dlqName =
+            this.configService.get<string>('RABBITMQ_TRANSFER_DLQ') ??
+            'txsim.transfer.events.dlq';
+
+        const retryDelayMs = Number(
+            this.configService.get<string>('PROCESSING_RETRY_DELAY_MS') ?? 10000,
+        );
+
         this.connection = await amqp.connect(rabbitmqUrl);
         this.channel = await this.connection.createChannel();
-        await this.channel?.assertQueue(queueName, { durable: true });
 
-        await this.channel?.prefetch(5);
+        await this.channel.assertExchange(exchange, 'topic', {
+            durable: true,
+        });
 
-        this.logger.log(`Processing worker is consuming queue: ${queueName}`);
+        await this.channel.assertQueue(queueName, {
+            durable: true,
+        });
 
-        await this.channel.consume(queueName, async (msg) => {
+        await this.channel.bindQueue(queueName, exchange, 'transfer.*');
+
+        /**
+         * Retry queue:
+         * Message nằm ở đây retryDelayMs milliseconds.
+         * Sau đó RabbitMQ dead-letter nó về exchange chính,
+         * routing key = transfer.completed.
+         */
+        await this.channel.assertQueue(retryQueueName, {
+            durable: true,
+            arguments: {
+                'x-message-ttl': retryDelayMs,
+                'x-dead-letter-exchange': exchange,
+                'x-dead-letter-routing-key': 'transfer.completed',
+            },
+        });
+
+        /**
+         * DLQ:
+         * Message lỗi quá số lần retry sẽ nằm ở đây.
+         */
+        await this.channel.assertQueue(dlqName, {
+            durable: true,
+        });
+
+        await this.channel.prefetch(5);
+
+        await this.channel.consume(
+            queueName,
+            async (msg) => {
                 if (!msg) {
                     this.logger.warn('Received empty message');
                     return;
                 }
+
                 const messageId = msg.properties.messageId ?? 'no-message-id';
 
                 try {
+                    this.logger.log(`Start handling message ${messageId}`);
 
-                    this.logger.log(`Received message with ID: ${messageId}`);
                     await this.handleMessage(msg);
-                    this.channel!.ack(msg);
-                    this.logger.log(`Acked message with ID: ${messageId}`);
-                }
-                catch (error: any) {
-                    this.logger.error(`Error processing message: ${error.message}`, error.stack);
-                    this.channel?.nack(msg, false, true);
-                    this.logger.log(`Nacked message with ID: ${messageId} for retry`);
-                }
 
+                    this.channel!.ack(msg);
+
+                    this.logger.log(`Acked message ${messageId}`);
+                } catch (error: any) {
+                    this.logger.error(
+                        `Error processing message ${messageId}: ${error.message}`,
+                        error.stack,
+                    );
+
+                    await this.handleFailedMessage(msg, error);
+                }
             },
-            
-            { noAck: false }
+            {
+                noAck: false,
+            },
         );
 
-
+        this.logger.log(`Processing worker is consuming queue: ${queueName}`);
     }
 
     async onModuleDestroy() {

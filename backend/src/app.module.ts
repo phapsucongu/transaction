@@ -8,6 +8,8 @@ import { AccountsModule } from './module/accounts/accounts.module';
 import { TransfersModule } from './module/transfers/transfers.module';
 import { AuthModule } from './module/auth/auth.module';
 import { ProcessingModule } from './module/processing/processing.module';
+import { AdminMessagingModule } from './module/admin-messaging/ad-messaging.module';
+import { AdminReconciliationModule } from './module/admin-reconciliation/admin-reconciliation.module';
 
 @Module({
   imports: [
@@ -21,7 +23,9 @@ import { ProcessingModule } from './module/processing/processing.module';
     AccountsModule,
     TransfersModule,
     AuthModule,
-    ProcessingModule
+    ProcessingModule,
+    AdminMessagingModule,
+    AdminReconciliationModule,
   ],
   controllers: [AppController],
   providers: [AppService],
